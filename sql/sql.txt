@@ -1,0 +1,141 @@
+download DuckDB, version 9
+D .open life_expectancy.db
+error about life_expectancy.db being version 51 and the current version of the exe is higher, not backward compatible.
+
+download DuckDB, version 8
+
+
+D .open life_expectancy.db
+
+D .tables
+life_expectancy
+D describe life_expectancy;
+┌─────────────────┬─────────────┬─────────┬─────────┬─────────┬───────┐
+│   column_name   │ column_type │  null   │   key   │ default │ extra │
+│     varchar     │   varchar   │ varchar │ varchar │ varchar │ int32 │
+├─────────────────┼─────────────┼─────────┼─────────┼─────────┼───────┤
+│ entity          │ VARCHAR     │ YES     │         │         │       │
+│ code            │ VARCHAR     │ YES     │         │         │       │
+│ year            │ INTEGER     │ YES     │         │         │       │
+│ life_expectancy │ FLOAT       │ YES     │         │         │       │
+└─────────────────┴─────────────┴─────────┴─────────┴─────────┴───────┘
+
+
+/*
+THE PROBLEM
+Please write down a SQL query that Identifies the country that experienced the lengthiest continuous period of declining life expectancy, year after year. The output of the sql should be the name of the country, the year where the period has begun and the year where the period ended.
+*/
+
+
+/*
+CTE:
+Use a recursive cte to identify all records from the data set where there is a decrease; recursive will loop through all records.
+
+The first part of union self joins the data table to itself to compare within a country one record to next year's record. It is excluding records where the life_expectancy of the first chronological record is less than the second record, i.e. the life_expectancy is bigger the second year. So this is finding all records where there is a decrease the next year. All years are stored as both the start and end year of the range at this time as this would be the minimum number of years in the range; i.e. 1.
+Ex:
+
+│   entity    │  code   │ year  │ start_year │ end_year │
+
+│ Afghanistan │ AFG     │  1977 │       1977 │     1977 │
+│ Afghanistan │ AFG     │  1978 │       1978 │     1978 │
+│ Afghanistan │ AFG     │  1981 │       1981 │     1981 │
+│ Afghanistan │ AFG     │  1983 │       1983 │     1983 │
+│ Afghanistan │ AFG     │  1993 │       1993 │     1993 │
+│ Afghanistan │ AFG     │  1997 │       1997 │     1997 │
+│ Afghanistan │ AFG     │  2016 │       2016 │     2016 │
+│ Afghanistan │ AFG     │  2019 │       2019 │     2019 │
+│ Afghanistan │ AFG     │  2020 │       2020 │     2020 │
+│ Afghanistan │ AFG     │  2021 │       2021 │     2021 │
+
+I am excluding non-country records by using "code is not null"
+
+Second part of union takes all years where there was a decrease and iterates through the records to see if the decrease exists for each of the following years' records. The result is a list of years where there was a decrease with each year compared to the subsequent years within the series of years that are continuous. Each comparison creates a row with the start year in the range and the year being compared as the end year. 
+Ex:
+
+│   entity    │  code   │ year  │ start_year │ end_year │
+
+│ Afghanistan │ AFG     │  1978 │       1977 │     1978 │
+│ Afghanistan │ AFG     │  1979 │       1978 │     1979 │
+│ Afghanistan │ AFG     │  1979 │       1977 │     1979 │
+│ Afghanistan │ AFG     │  1982 │       1981 │     1982 │
+│ Afghanistan │ AFG     │  1984 │       1983 │     1984 │
+│ Afghanistan │ AFG     │  1998 │       1997 │     1998 │
+│ Afghanistan │ AFG     │  2017 │       2016 │     2017 │
+│ Afghanistan │ AFG     │  2020 │       2019 │     2020 │
+│ Afghanistan │ AFG     │  2021 │       2020 │     2021 │
+│ Afghanistan │ AFG     │  2021 │       2019 │     2021 │
+
+SELECT query: 
+Taking the list of start and end years, the number of years in the each range is calculated by subtracting the start year from the end year and adding one. Partitioning it by country, ordering it descending and using the row number function allows us to rank all records within a country and select the highest for each country by selecting row number 1. The final list is then sorted by the number of years within the range descending so the country with the longest continuous period of declining life expectancy.
+*/
+
+/*CTE definition*/
+with recursive CTE_decrease as 
+(
+select	entity, code, year, year AS start_year, year AS end_year
+from 	life_expectancy as index_record
+where	not exists /*these are records where the life expectancy is increasing compared to the index record, so toss them*/
+	(
+	select 	1
+	from	life_expectancy AS next_record
+	where	next_record.entity = index_record.entity
+		and next_record.code = index_record.code
+		and next_record.year = index_record.year + 1 
+		and next_record.life_expectancy > index_record.life_expectancy
+	)
+	and code is not null /*no code = not a country*/
+union
+all
+select	dta.entity, dta.code, dta.year, decr.start_year, dta.year AS end_year
+from	life_expectancy AS dta join CTE_decrease AS decr on
+	dta.entity = decr.entity
+	and dta.code = decr.code
+	and dta.year = decr.end_year + 1
+	and dta.life_expectancy <
+	(
+	select	life_expectancy
+	from 	life_expectancy
+	where	entity = decr.entity
+		and code = decr.code
+		and year = decr.end_year
+	)
+)
+
+/*select from the CTE for results*/
+select	entity, code, start_year, end_year
+from	(
+	select	entity, code, start_year, end_year, row_number() over (partition by entity, code order by end_year - start_year + 1 desc) as rnum
+	from	CTE_decrease
+	) as ranked_periods
+WHERE rnum = 1
+order by end_year - start_year + 1 desc;
+
+
+
+
+
+
+
+
+
+/*
+sql for Evidence project
+*/
+
+/*life_expect_continent*/
+select  le.entity, le.year, le.life_expectancy
+from    life_expectancy le join continent cn on le.entity = cn.entity
+where   le.year = 2021
+order by le.life_expectancy desc;
+
+/*life_expect_economic*/
+select  le.entity, le.year, le.life_expectancy
+from    life_expectancy le join economic ec on le.entity = ec.entity
+where   le.year = 2021
+order by le.life_expectancy desc;
+
+/*life_expect_industrialization*/
+select  le.entity, le.year, le.life_expectancy
+from    life_expectancy le join industrialization ind on le.entity = ind.entity
+where   le.year = 2021
+order by le.life_expectancy desc;
